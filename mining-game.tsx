@@ -1,11 +1,15 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { motion, AnimatePresence } from "framer-motion"
 import { Diamond, Bomb, Coins } from "lucide-react"
+import { extractFeaturesFromEvent } from "./lib/extractFeaturesFromEvent"
+import { saveToIndexedDB } from "./services/dbServices"
+import { getMoveLabel } from "./lib/getMoveLabel"
+import * as tf from '@tensorflow/tfjs';
 
 function calculatePayout(bet: number, mines: number, diamonds: number): number {
   let M = 1
@@ -15,8 +19,11 @@ function calculatePayout(bet: number, mines: number, diamonds: number): number {
   return bet * M
 }
 
+
+const GAME_STEP = 10;
+
 export default function MiningGame() {
-  const [amount, setAmount] = useState("0")
+  const [amount, setAmount] = useState("1")
   const [mines, setMines] = useState("3")
   const [gameState, setGameState] = useState<"idle" | "playing" | "lost" | "won">("idle")
   const [grid, setGrid] = useState<Array<"hidden" | "gem" | "bomb">>(Array(25).fill("hidden"))
@@ -24,6 +31,9 @@ export default function MiningGame() {
   const [coins, setCoins] = useState(10) // Default balance set to 10
   const [currentBet, setCurrentBet] = useState(0)
   const [currentPayout, setCurrentPayout] = useState(0)
+  const [currentMoves, setCurrentMoves] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const modelRef = useRef(null)
 
   useEffect(() => {
     const savedCoins = localStorage.getItem("miningGameCoins")
@@ -37,6 +47,115 @@ export default function MiningGame() {
   useEffect(() => {
     localStorage.setItem("miningGameCoins", coins.toString())
   }, [coins])
+
+  // Initialize or Load AI Model
+  useEffect(() => {
+    async function initializeModel() {
+      const model = tf.sequential();
+      model.add(tf.layers.simpleRNN({ inputShape: [10, 13], units: 50, activation: "relu" }));
+      model.add(tf.layers.dense({ units: 25, activation: "softmax" }));
+      model.compile({ optimizer: "adam", loss: "sparseCategoricalCrossentropy", metrics: ["accuracy"] });
+
+      modelRef.current = model;
+      console.log("Model initialized.");
+    }
+
+    async function loadModel() {
+      try {
+        const savedModel = await tf.loadLayersModel("indexeddb://mining-game-model");
+
+        savedModel.compile({
+          optimizer: "adam",
+          loss: "sparseCategoricalCrossentropy",
+          metrics: ["accuracy"],
+        });
+
+        modelRef.current = savedModel;
+        console.log("Loaded existing model.");
+      } catch (error) {
+        console.log("No saved model found, initializing a new one.");
+        await initializeModel();
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadModel();
+  }, []);
+
+
+  useEffect(() => {
+    const gameGrid = document.getElementById("gameGrid");
+    if (!gameGrid) return;
+
+    const handleClick = async (event) => {
+      if (!modelRef.current) {
+        console.error("Model not loaded yet.");
+        return;
+      }
+
+      const move = extractFeaturesFromEvent(event);
+      const label = getMoveLabel(event);
+
+      setCurrentMoves((prevMoves) => {
+        const updatedMoves = [...prevMoves, move];
+        return updatedMoves.length > GAME_STEP ? updatedMoves.slice(1) : updatedMoves;
+      });
+
+      // Validate training data shape
+      if (currentMoves.length === GAME_STEP) {
+        console.log(currentMoves)
+        const inputTensor = tf.tensor3d([currentMoves], undefined, "float32"); // Convert to float32
+        console.log("Tensor shape:", inputTensor.shape); // Debugging
+
+        if (inputTensor.shape[2] !== 13) {
+          console.error("Feature shape mismatch! Expected 13, got:", inputTensor.shape[2]);
+          return;
+        }
+
+        // Train the AI model
+        // const X = tf.tensor3d([currentMoves], undefined, "float32");  // Ensure float32
+        const X = tf.tensor3d([currentMoves]).toFloat();
+        const y = tf.tensor1d([label], "float32");
+
+        console.log({ X, y })
+        await modelRef.current.fit(X, y, { epochs: 5, batchSize: 1 });
+        console.log("Model trained.");
+
+        await modelRef.current.save("indexeddb://mining-game-model");
+
+        X.dispose();
+        y.dispose();
+      }
+
+
+      // AI Prediction: Predict next move
+      if (currentMoves.length === 10) {
+        const inputTensor = tf.tensor3d([currentMoves]);
+        const prediction = modelRef.current.predict(inputTensor);
+        const predictedTile = prediction.argMax(-1).dataSync()[0];
+
+        console.log("Predicted next move:", predictedTile);
+        inputTensor.dispose();
+        prediction.dispose();
+
+        // OPTIONAL: Place bomb on predicted tile to make user lose
+        setGrid((prevGrid) => {
+          const newGrid = [...prevGrid];
+          if (newGrid[predictedTile] !== "bomb") {
+            newGrid[predictedTile] = "bomb";
+          }
+          return newGrid;
+        });
+      }
+    };
+
+    gameGrid.addEventListener("click", handleClick);
+
+    return () => {
+      gameGrid.removeEventListener("click", handleClick);
+    };
+  }, [currentMoves]);
 
   const handleAmountChange = (operation: "half" | "double") => {
     const currentAmount = Number.parseFloat(amount)
@@ -125,13 +244,18 @@ export default function MiningGame() {
     setCurrentPayout(0)
   }
 
+
+  if (isLoading) {
+    return <div> Loading </div>
+  }
+
   return (
     <div className="text-white p-8">
       <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
 
 
         {/* Game Grid */}
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-5 gap-2" id="gameGrid">
           {grid.map((tile, index) => (
             <motion.button
               key={index}
@@ -141,6 +265,7 @@ export default function MiningGame() {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               disabled={gameState !== "playing"}
+              data-index={index}
             >
               <AnimatePresence>
                 {revealedTiles.includes(index) && (
