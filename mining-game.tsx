@@ -104,24 +104,18 @@ export default function MiningGame() {
 
       // Validate training data shape
       if (currentMoves.length === GAME_STEP) {
-        console.log(currentMoves)
-        const inputTensor = tf.tensor3d([currentMoves], undefined, "float32"); // Convert to float32
-        console.log("Tensor shape:", inputTensor.shape); // Debugging
+        const X = tf.tensor3d([currentMoves], undefined, "float32"); // Convert features to float32
+        const y = tf.tensor1d([label], "float32"); // Convert labels to float32
 
-        if (inputTensor.shape[2] !== 13) {
-          console.error("Feature shape mismatch! Expected 13, got:", inputTensor.shape[2]);
-          return;
-        }
+        console.log("Training Data: ", X.shape, y.shape);
 
-        // Train the AI model
-        // const X = tf.tensor3d([currentMoves], undefined, "float32");  // Ensure float32
-        const X = tf.tensor3d([currentMoves]).toFloat();
-        const y = tf.tensor1d([label], "float32");
+        await modelRef.current.fit(X, y, {
+          epochs: 15, // Increase epochs to learn patterns
+          batchSize: 4, // Use a small batch size for better updates
+          verbose: 1 // Show training output
+        });
 
-        console.log({ X, y })
-        await modelRef.current.fit(X, y, { epochs: 5, batchSize: 1 });
         console.log("Model trained.");
-
         await modelRef.current.save("indexeddb://mining-game-model");
 
         X.dispose();
@@ -133,21 +127,51 @@ export default function MiningGame() {
       if (currentMoves.length === 10) {
         const inputTensor = tf.tensor3d([currentMoves]);
         const prediction = modelRef.current.predict(inputTensor);
-        const predictedTile = prediction.argMax(-1).dataSync()[0];
 
-        console.log("Predicted next move:", predictedTile);
+        // Get prediction probabilities
+        const probabilities = prediction.dataSync();
+
+        console.log(probabilities)
+
+        // Get top 3 most likely tiles while avoiding already revealed tiles
+        let sortedTiles = Array.from(probabilities)
+          .map((prob, index) => ({ index, prob })) // Convert to array of {index, probability}
+          .sort((a, b) => b.prob - a.prob) // Sort by highest probability
+          .map((entry) => entry.index); // Extract tile indexes
+
+        console.log("Sorted predictions:", sortedTiles);
+
+        // Remove already revealed tiles
+        sortedTiles = sortedTiles.filter((tile) => !revealedTiles.includes(tile));
+
+        // Select the top 3 non-revealed tiles
+        const bombTiles = sortedTiles.slice(0, 3);
+
+        console.log("Predicted bomb placements:", bombTiles);
+
         inputTensor.dispose();
         prediction.dispose();
 
-        // OPTIONAL: Place bomb on predicted tile to make user lose
+        // OPTIONAL: Place bombs on predicted tiles
         setGrid((prevGrid) => {
           const newGrid = [...prevGrid];
-          if (newGrid[predictedTile] !== "bomb") {
-            newGrid[predictedTile] = "bomb";
-          }
+          console.log(newGrid)
+
+          newGrid.forEach((tile, index) => {
+            if (tile == "bomb") {
+              newGrid[index] = "gem";
+            }
+          })
+
+          bombTiles.forEach((tile) => {
+            if (newGrid[tile] !== "bomb") {
+              newGrid[tile] = "bomb";
+            }
+          });
           return newGrid;
         });
       }
+
     };
 
     gameGrid.addEventListener("click", handleClick);
@@ -363,7 +387,7 @@ export default function MiningGame() {
           )}
 
           {(gameState === "won" || gameState === "lost") && (
-            <Button className="w-full bg-blue-500 hover:bg-blue-600 text-white py-6 text-lg" onClick={resetGame}>
+            <Button className="w-full bg-blue-500 hover:bg-blue-600 text-white py-6 text-lg" onClick={initializeGame}>
               Play Again
             </Button>
           )}
