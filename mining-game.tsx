@@ -100,13 +100,16 @@ export default function MiningGame() {
 
     const inputTensor = tf.tensor3d([X_test], [1, 10, 13], "float32");
     const prediction = modelRef.current.predict(inputTensor);
+    console.log({ prediction })
     const probabilities = prediction.dataSync();
+    console.log({ probabilities })
 
     let sortedTiles = Array.from(probabilities)
       .map((prob, index) => ({ index, prob: prob + Math.random() * 0.05 }))
       .sort((a, b) => b.prob - a.prob)
       .map(entry => entry.index);
 
+    console.log({ sortedTiles })
     sortedTiles = sortedTiles.filter(tile =>
       !revealedTiles.includes(tile) && grid[tile] !== "gem"
     );
@@ -207,7 +210,7 @@ export default function MiningGame() {
           "float32"
         );
 
-        const y_train_tensor = tf.tensor1d(labels, "int32");
+        const y_train_tensor = tf.tensor1d(labels, "float32");
 
         if (sequences.length > 0 && !isTraining) {
           setIsTraining(true);
