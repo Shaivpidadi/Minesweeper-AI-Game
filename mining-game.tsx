@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { motion, AnimatePresence } from "framer-motion"
 import { Diamond, Bomb, Coins } from "lucide-react"
 import { extractFeaturesFromEvent } from "./lib/extractFeaturesFromEvent"
-import { saveToIndexedDB } from "./services/dbServices"
+import { loadAllMoves, saveMoveToIndexedDB, saveToIndexedDB } from "./services/dbServices"
 import { getMoveLabel } from "./lib/getMoveLabel"
 import * as tf from '@tensorflow/tfjs';
 
@@ -26,21 +26,25 @@ export default function MiningGame() {
   const [amount, setAmount] = useState("1")
   const [mines, setMines] = useState("3")
   const [gameState, setGameState] = useState<"idle" | "playing" | "lost" | "won">("idle")
-  const [grid, setGrid] = useState<Array<"hidden" | "gem" | "bomb">>(Array(25).fill("hidden"))
   const [revealedTiles, setRevealedTiles] = useState<number[]>([])
-  const [coins, setCoins] = useState(10) // Default balance set to 10
+  const [coins, setCoins] = useState(10)
   const [currentBet, setCurrentBet] = useState(0)
   const [currentPayout, setCurrentPayout] = useState(0)
   const [currentMoves, setCurrentMoves] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isTraining, setIsTraining] = useState(false);
   const modelRef = useRef(null)
+  const gridRef = useRef(Array(25).fill("hidden"))
+
+  const [grid, setGrid] = useState([...gridRef.current])
+
 
   useEffect(() => {
     const savedCoins = localStorage.getItem("miningGameCoins")
     if (savedCoins) {
       setCoins(Number.parseFloat(savedCoins))
     } else {
-      localStorage.setItem("miningGameCoins", "10") // Set initial balance in local storage
+      localStorage.setItem("miningGameCoins", "10")
     }
   }, [])
 
@@ -83,6 +87,55 @@ export default function MiningGame() {
     loadModel();
   }, []);
 
+  const predictNextMoves = async () => {
+    console.log("In Predict")
+    const allMoves = await loadAllMoves();
+    if (allMoves.length < 10) return;
+
+    const X_test = allMoves.slice(-10).map((entry) =>
+      entry.move.map((num) => (typeof num === "number" ? num : 0))
+    );
+
+    console.log("X_test shape:", [X_test.length, X_test[0].length]);
+
+    const inputTensor = tf.tensor3d([X_test], [1, 10, 13], "float32");
+    const prediction = modelRef.current.predict(inputTensor);
+    const probabilities = prediction.dataSync();
+
+    let sortedTiles = Array.from(probabilities)
+      .map((prob, index) => ({ index, prob: prob + Math.random() * 0.05 }))
+      .sort((a, b) => b.prob - a.prob)
+      .map(entry => entry.index);
+
+    sortedTiles = sortedTiles.filter(tile =>
+      !revealedTiles.includes(tile) && grid[tile] !== "gem"
+    );
+
+    const bombTiles = sortedTiles.slice(0, 3);
+    console.log("Final Bomb Placements:", bombTiles);
+
+    inputTensor.dispose();
+    prediction.dispose();
+
+    setGrid((prevGrid) => {
+      const newGrid = [...prevGrid];
+
+      newGrid.forEach((tile, index) => {
+        if (tile === "bomb") newGrid[index] = "hidden";
+      });
+
+      bombTiles.forEach((tile) => {
+        if (newGrid[tile] !== "gem" && newGrid[tile] !== "bomb") {
+          newGrid[tile] = "bomb";
+        }
+      });
+
+      gridRef.current = newGrid;
+      return newGrid;
+    });
+  };
+
+
 
   useEffect(() => {
     const gameGrid = document.getElementById("gameGrid");
@@ -97,89 +150,101 @@ export default function MiningGame() {
       const move = extractFeaturesFromEvent(event);
       const label = getMoveLabel(event);
 
-      setCurrentMoves((prevMoves) => {
-        const updatedMoves = [...prevMoves, move];
-        return updatedMoves.length > GAME_STEP ? updatedMoves.slice(1) : updatedMoves;
-      });
+      // Save move to IndexedDB
+      await saveMoveToIndexedDB(move, label);
 
-      // Validate training data shape
-      if (currentMoves.length === GAME_STEP) {
-        const X = tf.tensor3d([currentMoves], undefined, "float32"); // Convert features to float32
-        const y = tf.tensor1d([label], "float32"); // Convert labels to float32
+      const allMoves = await loadAllMoves();
+      console.log("✅ Loaded moves from IndexedDB:", { allMoves });
 
-        console.log("Training Data: ", X.shape, y.shape);
+      const GAME_STEP = 10; // Matches model's sequence length
+      const sequences = [];
+      const labels = [];
 
-        await modelRef.current.fit(X, y, {
-          epochs: 15, // Increase epochs to learn patterns
-          batchSize: 4, // Use a small batch size for better updates
-          verbose: 1 // Show training output
-        });
+      if (allMoves.length >= GAME_STEP + 1) {
+        for (let i = 0; i < allMoves.length - GAME_STEP; i++) {
+          const sequence = allMoves
+            .slice(i, i + GAME_STEP)
+            .map((entry) => {
+              let features;
+              if (Array.isArray(entry.move)) {
+                features = entry.move.map((num) => (typeof num === "number" ? num : 0)); // Ensure numeric
+              } else if (typeof entry.move === "object") {
+                features = Object.values(entry.move).map((num) => (typeof num === "number" ? num : 0));
+              } else {
+                console.warn("⚠️ Unexpected move format:", entry.move);
+                features = new Array(13).fill(0);
+              }
 
-        console.log("Model trained.");
-        await modelRef.current.save("indexeddb://mining-game-model");
+              // Validate feature length
+              if (features.length !== 13) {
+                console.error("❌ Invalid feature length:", features);
+                return new Array(13).fill(0);
+              }
+              return features;
+            });
 
-        X.dispose();
-        y.dispose();
+          // Label is the next move after the sequence
+          const nextLabel = parseInt(allMoves[i + GAME_STEP].label, 10);
+          sequences.push(sequence);
+          labels.push(nextLabel);
+        }
       }
 
-
-      // AI Prediction: Predict next move
-      if (currentMoves.length === 10) {
-        const inputTensor = tf.tensor3d([currentMoves]);
-        const prediction = modelRef.current.predict(inputTensor);
-
-        // Get prediction probabilities
-        const probabilities = prediction.dataSync();
-
-        console.log(probabilities)
-
-        // Get top 3 most likely tiles while avoiding already revealed tiles
-        let sortedTiles = Array.from(probabilities)
-          .map((prob, index) => ({ index, prob })) // Convert to array of {index, probability}
-          .sort((a, b) => b.prob - a.prob) // Sort by highest probability
-          .map((entry) => entry.index); // Extract tile indexes
-
-        console.log("Sorted predictions:", sortedTiles);
-
-        // Remove already revealed tiles
-        sortedTiles = sortedTiles.filter((tile) => !revealedTiles.includes(tile));
-
-        // Select the top 3 non-revealed tiles
-        const bombTiles = sortedTiles.slice(0, 3);
-
-        console.log("Predicted bomb placements:", bombTiles);
-
-        inputTensor.dispose();
-        prediction.dispose();
-
-        // OPTIONAL: Place bombs on predicted tiles
-        setGrid((prevGrid) => {
-          const newGrid = [...prevGrid];
-          console.log(newGrid)
-
-          newGrid.forEach((tile, index) => {
-            if (tile == "bomb") {
-              newGrid[index] = "gem";
-            }
-          })
-
-          bombTiles.forEach((tile) => {
-            if (newGrid[tile] !== "bomb") {
-              newGrid[tile] = "bomb";
-            }
-          });
-          return newGrid;
-        });
+      if (sequences.length === 0) {
+        console.log("⏳ Not enough moves to train yet.");
+        return;
       }
 
+      // ✅ Ensure Proper 3D Formatting
+      const X_train_3d = sequences.map(seq => seq.map(feat => feat.map(num => num))); // Removes extra nesting
+      console.log("✅ X_train_3d shape:", [X_train_3d.length, X_train_3d[0].length, X_train_3d[0][0].length]);
+
+      try {
+        // ✅ Convert to Tensor3D with Correct Shape
+        const X_train_tensor = tf.tensor3d(
+          X_train_3d, // Flatten only if needed
+          [X_train_3d.length, GAME_STEP, 13], // Shape: [batch_size, 10, 13]
+          "float32"
+        );
+
+        const y_train_tensor = tf.tensor1d(labels, "int32");
+
+        if (sequences.length > 0 && !isTraining) {
+          setIsTraining(true);
+          try {
+            console.log(`🚀 Training on ${sequences.length} sequences...`);
+            await modelRef.current.fit(X_train_tensor, y_train_tensor, {
+              epochs: 15,
+              batchSize: 8,
+              verbose: 1,
+            });
+
+            console.log("✅ Model trained.");
+            await modelRef.current.save("indexeddb://mining-game-model");
+          } catch (error) {
+            console.error("❌ Training error:", error);
+          } finally {
+            X_train_tensor.dispose();
+            y_train_tensor.dispose();
+            setIsTraining(false);
+          }
+        }
+        console.log({ gameState })
+
+        if (gameState === "playing") {
+          await predictNextMoves();
+        }
+      } catch (tensorError) {
+        console.error("🚨 Tensor conversion error:", tensorError);
+      }
     };
 
     gameGrid.addEventListener("click", handleClick);
-
     return () => {
       gameGrid.removeEventListener("click", handleClick);
     };
-  }, [currentMoves]);
+  }, [currentMoves, gameState]);
+
 
   const handleAmountChange = (operation: "half" | "double") => {
     const currentAmount = Number.parseFloat(amount)

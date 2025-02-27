@@ -1,60 +1,36 @@
+import { openDB } from "idb";
+
 const DB_NAME = "MINING";
 const DB_VERSION = 1;
 
 const DATASET = "dataset";
 
-const openDatabase = () => {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-        request.onupgradeneeded = (event) => {
-            const db = event.target.result;
-            db.createObjectStore(DATASET, { keyPath: "id" });
-        };
-
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject("Failed to open IndexedDB");
+const saveMoveToIndexedDB = async (move, label) => {
+    const db = await openDB("miningGameDB", 1, {
+        upgrade(db) {
+            if (!db.objectStoreNames.contains("moves")) {
+                db.createObjectStore("moves", { autoIncrement: true });
+            }
+        },
     });
-};
 
-const saveToIndexedDB = async (collection, key, value) => {
-    const db = await openDatabase();
-    const transaction = db.transaction(collection, "readwrite");
-    const store = transaction.objectStore(collection);
-    store.put({ id: key, data: value });
-};
+    const tx = db.transaction("moves", "readwrite");
+    const store = tx.objectStore("moves");
+    await store.add({ move, label });
+    await tx.done;
+}
 
-const loadFromIndexedDB = async (collection, key) => {
-    const db = await openDatabase();
-    const transaction = db.transaction(collection, "readonly");
-    const store = transaction.objectStore(collection);
-    const request = store.get(key);
-
-    return new Promise((resolve, reject) => {
-        request.onsuccess = () => resolve(request.result?.data || null);
-        request.onerror = () => reject("Failed to retrieve data from IndexedDB");
-    });
-};
-
-const clearIndexedDB = async () => {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(DB_NAME);
-        request.onsuccess = () => {
-            console.log(`Database ${DB_NAME} deleted successfully`);
-            resolve();
-        };
-        request.onerror = (event) => {
-            console.error(`Error deleting database: ${event.target.errorCode}`);
-            reject(event);
-        };
-        request.onblocked = () => {
-            console.warn(`Database deletion blocked`);
-        };
-    });
-};
+const loadAllMoves = async () => {
+    const db = await openDB("miningGameDB", 1);
+    const tx = db.transaction("moves", "readonly");
+    const store = tx.objectStore("moves");
+    const allMoves = await store.getAll();
+    await tx.done;
+    return allMoves;
+}
 
 export {
-    loadFromIndexedDB,
-    saveToIndexedDB,
-    clearIndexedDB,
+    saveMoveToIndexedDB,
+    loadAllMoves,
 };
