@@ -1,4 +1,4 @@
-# 🚀 Minesweeper AI Trainer
+# 🚀 Minesweeper AI Game
 
 A **self-learning AI-powered Minesweeper-style game** where the AI **predicts the next move** based on past **user moves**. Built using **React, TensorFlow.js, and IndexedDB** for a continuous learning experience.
 
