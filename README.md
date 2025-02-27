@@ -25,3 +25,6 @@ Clone the repository:
 ```sh
 git clone https://github.com/your-username/minesweeper-ai-trainer.git
 cd minesweeper-ai-trainer
+
+
+Preview: https://minesweeper-ai-game.vercel.app/
