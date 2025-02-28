@@ -73,7 +73,7 @@ export default function MiningGame() {
         setIsLoading(true)
         setLoaderState("finding")
         const savedModel = await tf.loadLayersModel("indexeddb://mining-game-model");
-
+        setLoaderState("initialising")
         savedModel.compile({
           optimizer: "adam",
           loss: "sparseCategoricalCrossentropy",
@@ -333,14 +333,6 @@ export default function MiningGame() {
 
   const claimCoins = () => {
     setCoins((prevCoins) => prevCoins + 10)
-  }
-
-  const resetGame = () => {
-    setGameState("idle")
-    setGrid(Array(25).fill("hidden"))
-    setRevealedTiles([])
-    setCurrentBet(0)
-    setCurrentPayout(0)
   }
 
   return (
