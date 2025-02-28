@@ -7,9 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { motion, AnimatePresence } from "framer-motion"
 import { Diamond, Bomb, Coins } from "lucide-react"
 import { extractFeaturesFromEvent } from "./lib/extractFeaturesFromEvent"
-import { loadAllMoves, saveMoveToIndexedDB, saveToIndexedDB } from "./services/dbServices"
+import { loadAllMoves, saveMoveToIndexedDB } from "./services/dbServices"
 import { getMoveLabel } from "./lib/getMoveLabel"
 import * as tf from '@tensorflow/tfjs';
+import AILoader from "./components/loader"
+
+type LoaderState = "initialising" | "finding" | "initiased" | "idle"
 
 function calculatePayout(bet: number, mines: number, diamonds: number): number {
   let M = 1
@@ -31,7 +34,8 @@ export default function MiningGame() {
   const [currentBet, setCurrentBet] = useState(0)
   const [currentPayout, setCurrentPayout] = useState(0)
   const [currentMoves, setCurrentMoves] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loaderState, setLoaderState] = useState<LoaderState>("idle")
   const [isTraining, setIsTraining] = useState(false);
   const modelRef = useRef(null)
   const gridRef = useRef(Array(25).fill("hidden"))
@@ -52,9 +56,9 @@ export default function MiningGame() {
     localStorage.setItem("miningGameCoins", coins.toString())
   }, [coins])
 
-  // Initialize or Load AI Model
   useEffect(() => {
     async function initializeModel() {
+      setLoaderState("initialising")
       const model = tf.sequential();
       model.add(tf.layers.simpleRNN({ inputShape: [10, 13], units: 50, activation: "relu" }));
       model.add(tf.layers.dense({ units: 25, activation: "softmax" }));
@@ -66,6 +70,8 @@ export default function MiningGame() {
 
     async function loadModel() {
       try {
+        setIsLoading(true)
+        setLoaderState("finding")
         const savedModel = await tf.loadLayersModel("indexeddb://mining-game-model");
 
         savedModel.compile({
@@ -80,7 +86,10 @@ export default function MiningGame() {
         console.log("No saved model found, initializing a new one.");
         await initializeModel();
       } finally {
-        setIsLoading(false);
+        setLoaderState("initiased")
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 2000);
       }
     }
 
@@ -198,14 +207,12 @@ export default function MiningGame() {
         return;
       }
 
-      // ✅ Ensure Proper 3D Formatting
-      const X_train_3d = sequences.map(seq => seq.map(feat => feat.map(num => num))); // Removes extra nesting
+      const X_train_3d = sequences.map(seq => seq.map(feat => feat.map(num => num)));
       console.log("✅ X_train_3d shape:", [X_train_3d.length, X_train_3d[0].length, X_train_3d[0][0].length]);
 
       try {
-        // ✅ Convert to Tensor3D with Correct Shape
         const X_train_tensor = tf.tensor3d(
-          X_train_3d, // Flatten only if needed
+          X_train_3d,
           [X_train_3d.length, GAME_STEP, 13], // Shape: [batch_size, 10, 13]
           "float32"
         );
@@ -337,15 +344,14 @@ export default function MiningGame() {
   }
 
 
-  if (isLoading) {
-    return <div> Loading </div>
-  }
+  // if (isLoading) {
+  //   return <AILoader state={loaderState} />
+  // }
 
   return (
     <div className="text-white p-8">
+      {isLoading && <AILoader isVisible={isLoading} state={loaderState} />}
       <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
-
-
         {/* Game Grid */}
         <div className="grid grid-cols-5 gap-2" id="gameGrid">
           {grid.map((tile, index) => (
