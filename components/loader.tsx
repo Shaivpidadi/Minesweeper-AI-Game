@@ -18,9 +18,6 @@ export default function AILoader({
   state = "idle",
   message,
   isVisible = false,
-  onComplete,
-  autoProgress = false,
-  autoProgressDuration = 5000,
 }: AILoaderProps) {
   const [currentState, setCurrentState] = useState<LoaderState>(state)
   const [customMessage, setCustomMessage] = useState<string | undefined>(message)
@@ -51,19 +48,6 @@ export default function AILoader({
         return ""
     }
   }
-
-  // const getStateIcon = () => {
-  //   switch (currentState) {
-  //     case "predicting":
-  //       return <Brain className="w-6 h-6 text-primary animate-pulse" />
-  //     case "analyzing":
-  //       return <Activity className="w-6 h-6 text-amber-500 animate-pulse" />
-  //     case "predicted":
-  //       return <CheckCircle className="w-6 h-6 text-green-500" />
-  //     default:
-  //       return null
-  //   }
-  // }
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm z-50">

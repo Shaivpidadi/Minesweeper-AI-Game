@@ -343,11 +343,6 @@ export default function MiningGame() {
     setCurrentPayout(0)
   }
 
-
-  // if (isLoading) {
-  //   return <AILoader state={loaderState} />
-  // }
-
   return (
     <div className="text-white p-8">
       {isLoading && <AILoader isVisible={isLoading} state={loaderState} />}
